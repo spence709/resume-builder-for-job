@@ -60,17 +60,30 @@ Return ONLY a JSON object in this format:
           },
         ],
         temperature: 0.7,
+        response_format: { type: "json_object" },
       })
       
       const scoreResponse = completion.choices[0]?.message?.content || ""
       console.log("[v0] Score response:", scoreResponse)
 
-      const scoreData = JSON.parse(scoreResponse)
-      atsScore = scoreData.score
-      scoreSummary = scoreData.summary
-      console.log("[v0] ATS Score calculated:", atsScore)
+      try {
+        const scoreData = JSON.parse(scoreResponse)
+        atsScore = scoreData.score || 65
+        scoreSummary = scoreData.summary || "Could not calculate score"
+        console.log("[v0] ATS Score calculated:", atsScore)
+      } catch (parseError) {
+        console.error("[v0] JSON parse error:", parseError)
+        // Try to extract score from text if JSON parsing fails
+        const scoreMatch = scoreResponse.match(/"score"\s*:\s*(\d+)/)
+        const summaryMatch = scoreResponse.match(/"summary"\s*:\s*"([^"]+)"/)
+        atsScore = scoreMatch ? parseInt(scoreMatch[1]) : 65
+        scoreSummary = summaryMatch ? summaryMatch[1] : "Could not calculate score"
+      }
     } catch (scoreError) {
       console.error("[v0] Score generation error:", scoreError)
+      if (scoreError instanceof Error) {
+        console.error("[v0] Error details:", scoreError.message)
+      }
       atsScore = 65
       scoreSummary = "Could not calculate score"
     }
@@ -112,13 +125,37 @@ Return ONLY the optimized resume with the same structure, no explanations.`
     })
     
     const optimizedResume = completion.choices[0]?.message?.content || ""
+    
+    if (!optimizedResume) {
+      throw new Error("OpenAI API returned empty response")
+    }
+    
     console.log("[v0] Optimization complete")
 
     return Response.json({ optimizedResume, atsScore, scoreSummary })
   } catch (error) {
     console.error("[v0] Full error object:", error)
-    console.error("[v0] Error message:", error instanceof Error ? error.message : String(error))
+    
+    let errorMessage = "Failed to optimize resume. Please check your API configuration."
+    
+    if (error instanceof Error) {
+      console.error("[v0] Error message:", error.message)
+      console.error("[v0] Error stack:", error.stack)
+      
+      // Provide more specific error messages
+      if (error.message.includes("API key")) {
+        errorMessage = "OpenAI API key is invalid or missing. Please check your OPENAI_API_KEY environment variable."
+      } else if (error.message.includes("rate limit")) {
+        errorMessage = "OpenAI API rate limit exceeded. Please try again later."
+      } else if (error.message.includes("insufficient_quota")) {
+        errorMessage = "OpenAI API quota exceeded. Please check your OpenAI account billing."
+      } else if (error.message.includes("network") || error.message.includes("fetch")) {
+        errorMessage = "Network error connecting to OpenAI API. Please check your internet connection."
+      } else {
+        errorMessage = `Error: ${error.message}`
+      }
+    }
 
-    return Response.json({ error: "Failed to optimize resume. Please check your API configuration." }, { status: 500 })
+    return Response.json({ error: errorMessage }, { status: 500 })
   }
 }
